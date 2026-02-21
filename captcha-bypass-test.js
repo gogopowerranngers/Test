@@ -340,7 +340,7 @@ _____  ______  _____  _    _  _____  _____
     console.log(chalk.white(`[*] Time: ${args.time}s`));
     console.log(chalk.white(`[*] Rate: ${args.Rate}/s per thread`));
     console.log(chalk.white(`[*] Threads: ${args.threads}`));
-    l
+    
     if (!fs.existsSync('ua.txt')) {
         const uas = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -374,4 +374,5 @@ if (cluster.isMaster) {
 }
 
 process.on('uncaughtException', () => {});
+
 process.on('unhandledRejection', () => {});
