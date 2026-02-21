@@ -1,0 +1,14 @@
+npm install puppeteer-real-browser
+npm install fingerprint-generator
+npm install timers
+npm install chalk
+npm install colors
+npm install axios
+npm install http2
+npm install tls
+npm install net
+npm install crypto
+npm install cluster
+npm install os
+npm install puppeteer-extra
+npm install puppeteer-extra-plugin-stealth
